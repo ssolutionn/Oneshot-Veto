@@ -8,10 +8,11 @@ the HLTV text. English by default, Russian with the flag.
 (`veto.html`, `veto.js`, `veto-room.js`, …); `node scripts/build-veto-site.mjs`
 there rebuilds this copy without any panel files or roster data.
 
-## Publish (Cloudflare Pages)
+## Publish (Cloudflare)
 
-Workers & Pages → Create → Pages → Connect to Git → this repository.
-Framework preset: None. Build command: empty. Build output directory: `/`.
-`_headers` sets the security headers.
+Workers & Pages → Create → Import a repository → this one. `wrangler.jsonc`
+serves the files as static assets (`.assetsignore` leaves the config out);
+turn the `workers.dev` address on in Settings → Domains & Routes. As Pages:
+no build command, output directory `/`. `_headers` sets the security headers.
 
 Locally: any static server, e.g. `python3 -m http.server 8080`.

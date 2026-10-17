@@ -21,4 +21,7 @@ branch `main`, no build command, deploy command `npx wrangler deploy`
 A push that shows no new row in Deployments means the Cloudflare GitHub app
 does not see this repository: Settings → Builds → Git repository → Manage.
 
-Locally: any static server, e.g. `python3 -m http.server 8080`.
+VDO rooms work on any static host. Server rooms need the relay described in
+`RELAY.md`: deploy this Worker's Durable Objects first; Pages forwards only
+`/api/veto-relay` to that Worker. For a future server use Node >=22 and the
+same HTTP protocol. A static file server alone cannot synchronize clients.

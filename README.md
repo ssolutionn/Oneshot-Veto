@@ -31,5 +31,6 @@ does not see this repository: Settings → Builds → Git repository → Manage.
 
 VDO rooms work on any static host. Server rooms need the relay described in
 `RELAY.md`: deploy this Worker's Durable Objects first; Pages forwards only
-`/api/veto-relay` to that Worker. For a future server use Node >=22 and the
+`/api/veto-relay` and `/api/veto-link` to that Worker. Readable personal captain
+addresses use `/tournament_team#k=…`; send the complete private link. For a future server use Node >=22 and the
 same HTTP protocol. A static file server alone cannot synchronize clients.

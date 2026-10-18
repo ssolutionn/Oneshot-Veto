@@ -10,6 +10,14 @@ there rebuilds this copy without any panel files or roster data.
 
 ## Publish (Cloudflare)
 
+The included **Deploy veto to Cloudflare** GitHub Actions workflow publishes
+both the Worker relay and Pages on a push to `main`. Configure the two
+repository credentials described in `RELAY.md`; no credentials belong in
+the site files. The workflow verifies public assets and relay health after
+deployment. A missing credential is an explicit failed check.
+
+Alternatively, using the Cloudflare Git integration:
+
 Workers & Pages → Create → Import a repository → this one. `wrangler.jsonc`
 serves the files as static assets (`.assetsignore` leaves the config out);
 turn the `workers.dev` address on in Settings → Domains & Routes. As Pages:

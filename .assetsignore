@@ -9,3 +9,5 @@ server/
 functions/
 package.json
 RELAY.md
+CLAUDE.md
+SECURITY.md

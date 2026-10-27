@@ -11,6 +11,10 @@ export class ServerRoomLink {
   }
   async open(box,via,fresh=true){const msg=await unseal(this.secrets.key,box);if(msg&&!this.stopped)return this.onMessage(msg,via,fresh);}
   async send(message){if(!this.stopped)return this.client.send(await seal(this.secrets.key,message));}
+  // Read-only view for the UI: a signed packet is queued after a failed POST.
+  get unsent(){return Boolean(this.client.writeFailed&&this.client.pending);}
+  // Read-only: a publish attempt is currently in flight (badge anti-flicker).
+  get sending(){return Boolean(this.client.sending);}
   close(){this.stopped=true;this.client.close();}
 }
 export function connectServerWatch(room,secrets,deliver,onStatus=()=>{}) {

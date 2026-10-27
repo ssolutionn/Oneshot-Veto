@@ -5,6 +5,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "relay": "node server/veto-relay-node.mjs"
+    "relay": "node server/veto-relay-node.mjs",
+    "test": "node --test test/*.test.js"
   }
 }

@@ -672,13 +672,14 @@ async function enterRoom(room) {
   const presenceKeyOf = team => presenceState(team, online(team));
   function paintPresence(team, live) {
     const el = $('vtPresence' + team);
-    // Captains see only the opponent: their own card already says "это ты".
-    // Spectators and the admin (me === null) keep both chips.
-    el.hidden = team === me;
-    if (team === me) return;
+    // Chips stay hidden until first painted (HTML default hidden): neither the
+    // pre-render flash nor a crashed entry path can show an empty default chip.
+    // Captains see only the opponent; spectators and the admin keep both.
+    if (team === me) { el.hidden = true; return; }
     el.dataset.state = presenceState(team, live);
     const key = 'presence' + (el.dataset.state === 'online' ? 'Online' : el.dataset.state === 'offline' ? 'Offline' : 'Expected');
     el.firstElementChild.textContent = names[team] + ' · ' + t(key);
+    el.hidden = false;
   }
   // Spectators and the admin only listen: they add no load on the captains' phones.
   // Serialize envelopes so their signed timestamps cannot overtake each other.

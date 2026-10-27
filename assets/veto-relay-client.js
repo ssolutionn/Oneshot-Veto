@@ -17,13 +17,16 @@ export class RelayClient {
     this.topics=[...new Set(topics)];
     if(!this.topics.length||this.topics.length>4||!this.topics.every(topicValid))throw Error('Invalid topics');
     Object.assign(this,{onPacket,publisher,onStatus,interval,fetchImpl});
-    this.seen=new Map();this.stopped=false;this.timer=null;this.failures=0;this.lastPacketAt=0;
+    this.seen=new Map();this.stopped=false;this.timer=null;this.failures=0;this.writeFailures=0;this.lastPacketAt=0;
     this.pending=null;this.sending=null;this.writeFailed=false;this.controllers=new Set();
-    this.wake=()=>{clearTimeout(this.timer);this.poll();};
+    this.pollWake=false;this.retryTimer=null;this.closedForPageHide=false;
+    this.wake=()=>{if(this.stopped)return;clearTimeout(this.timer);if(this.polling)this.pollWake=true;else this.poll();this.retryPending();};
     globalThis.addEventListener?.('online',this.wake);
     globalThis.addEventListener?.('pageshow',this.wake);
-    this.hide=event=>{if(!event.persisted)this.close();};
+    this.hide=event=>{if(event.persisted){this.closedForPageHide=true;for(const c of this.controllers)c.abort();this.controllers.clear();}else this.close();};
+    this.show=event=>{if(this.closedForPageHide){this.closedForPageHide=false;this.wake();}};
     globalThis.addEventListener?.('pagehide',this.hide);
+    globalThis.addEventListener?.('pageshow',this.show);
     this.visible=()=>{if(globalThis.document?.visibilityState==='visible')this.wake();};
     globalThis.document?.addEventListener('visibilitychange',this.visible);
     this.poll();
@@ -39,7 +42,8 @@ export class RelayClient {
     }finally{clearTimeout(timer);this.controllers.delete(c);}
   }
   async poll() {
-    if(this.stopped||this.polling)return;
+    if(this.stopped)return;
+    if(this.polling){this.pollWake=true;return;}
     this.polling=true;clearTimeout(this.timer);
     try{
       const url=new URL(this.endpoint);url.searchParams.set('topics',this.topics.join(','));
@@ -58,11 +62,21 @@ export class RelayClient {
     }catch{if(!this.stopped){this.failures++;this.onStatus('retry');}}
     finally{
       this.polling=false;
-      if(!this.stopped)this.timer=setTimeout(()=>this.poll(),Math.min(8000,this.interval*Math.max(1,this.failures)));
+      if(!this.stopped){
+        if(this.pollWake){this.pollWake=false;this.poll();}
+        else this.timer=setTimeout(()=>this.poll(),Math.min(8000,this.interval*Math.max(1,this.failures)));
+      }
     }
+  }
+  retryPending() {
+    if(!this.pending||!this.publisher||this.stopped||this.sending)return;
+    clearTimeout(this.retryTimer);
+    const delay=Math.min(8000,Math.max(this.interval, this.interval*Math.pow(2,Math.min(this.writeFailures,3))));
+    this.retryTimer=setTimeout(()=>{this.retryTimer=null;this.send(this.pending);},delay);
   }
   send(box) {
     if(!this.publisher||this.stopped)return Promise.resolve(false);
+    clearTimeout(this.retryTimer);this.retryTimer=null;
     this.pending=box;
     if(this.sending)return this.sending;
     this.sending=(async()=>{
@@ -74,14 +88,14 @@ export class RelayClient {
           const packet=await signRelayPacket(this.publisher.key,this.publisher.point,next,now);
           const reply=await this.request(this.endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(packet)});
           if(reply.protocol!==1||reply.accepted!==true)throw Error('Relay did not accept packet');
-          this.writeFailed=false;this.onStatus('online');accepted=true;
+          this.writeFailed=false;this.writeFailures=0;this.onStatus('online');accepted=true;
         }catch{
-          if(!this.stopped){this.pending ||= next;this.writeFailed=true;this.onStatus('retry');}
+          if(!this.stopped){this.pending ||= next;this.writeFailed=true;this.writeFailures++;this.onStatus('retry');this.retryPending();}
           break;
         }
       }
       return accepted;
-    })().finally(()=>{this.sending=null;});
+    })().finally(()=>{this.sending=null;if(this.pending&&!this.stopped)this.retryPending();});
     return this.sending;
   }
   close() {
@@ -89,7 +103,9 @@ export class RelayClient {
     globalThis.removeEventListener?.('online',this.wake);
     globalThis.removeEventListener?.('pageshow',this.wake);
     globalThis.removeEventListener?.('pagehide',this.hide);
+    globalThis.removeEventListener?.('pageshow',this.show);
     globalThis.document?.removeEventListener('visibilitychange',this.visible);
+    clearTimeout(this.retryTimer);
     for(const c of this.controllers)c.abort();this.controllers.clear();
   }
 }

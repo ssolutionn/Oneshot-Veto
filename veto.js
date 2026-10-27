@@ -360,7 +360,7 @@ async function setupCreate() {
     const last = store(LAST_KEY);
     const room = last?.room;
     const fresh = Date.now() - (Number(last?.at) || 0) < RESTORE_FOR;
-    if (fresh && room && room.chooser == null && Array.isArray(room.t) && last.links?.a && last.links?.b && last.links?.s && last.links?.o &&
+    if (fresh && room && !(room.v === 3 && room.chooser != null) && Array.isArray(room.t) && last.links?.a && last.links?.b && last.links?.s && last.links?.o &&
         (!asked || (asked[0] === room.t[0] && asked[1] === room.t[1] && asked[2] === room.f && (!params.has('via') || Boolean(room.relay) === (params.get('via') === 'server')) &&
           (!params.has('tournament') || params.get('tournament') === (last.tournament||DEFAULT_TOURNAMENT)) &&
           (!params.has('start') || params.get('start') === String(room.starter ?? 'coin'))))) {
@@ -394,7 +394,7 @@ class Link {
     for (const stream of views) this.make('view', stream);
     this.listener = event => {
       const frame = this.frames.find(item => item.contentWindow === event.source);
-      if (!frame) return;
+      if (!frame || !VDO_ORIGINS.has(event.origin)) return;
       const box = event.data?.dataReceived?.oneshotVeto;
       const stream = this.streams.get(frame) || '';
       if (box && stream) {
@@ -485,7 +485,7 @@ class Link {
   }
   async send(message) {
     const box = await seal(this.secrets.key, message);
-    for (const iframe of this.frames) iframe.contentWindow?.postMessage({ sendData: { oneshotVeto: box } }, '*');
+    for (const iframe of this.frames) iframe.contentWindow?.postMessage({ sendData: { oneshotVeto: box } }, new URL(VDO).origin);
     this.channel?.postMessage(box);
   }
   close() {
@@ -652,7 +652,7 @@ async function enterRoom(room) {
   }
   // Only the newest log from each source waits for verification, so a flood
   // of junk cannot hold real moves back.
-  async function receive(message, via) {
+  async function receive(message, via, fresh = true) {
     if (!message || message.t !== 'log' || !Array.isArray(message.log)) return;
     await learnKeys(message.p);
     // The dedicated viewer iframe proves its stream owner. If that iframe is
@@ -670,10 +670,10 @@ async function enterRoom(room) {
       from = proofFrom;
       link.reconnectStream?.(secrets.streams[from === 'a' ? 0 : 1]);
     }
-    if (from) seen[from] = Date.now();
+    if (from && fresh) seen[from] = Date.now();
     // Calls additionally require the captain's signature: knowing a public
     // spectator link and a VDO stream ID is not enough to ring the admin.
-    if (admin && from && proofFrom === from && Number.isSafeInteger(message.call)) {
+    if (fresh && admin && from && proofFrom === from && Number.isSafeInteger(message.call)) {
       ring(from === 'a' ? 0 : 1, message.call);
     }
     const unkeyed = Array.isArray(message.p) && [0, 1].some(team => !room.p[team] && message.p[team]);

@@ -16,13 +16,20 @@ export async function readJsonBody(request, maxBytes=MAX_PACKET_BYTES) {
  if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type')||''))throw Error('type');
  if(Number(request.headers.get('content-length'))>maxBytes)throw Error('size');
  const reader=request.body?.getReader();if(!reader)throw Error('body');
- const chunks=[];let total=0,timer;
+ const chunks=[];let total=0,timer,aborted=false;
+ let reading;
  try{
-  await Promise.race([(async()=>{
-   while(true){const {done,value}=await reader.read();if(done)break;
+  reading=(async()=>{
+   while(true){const {done,value}=await reader.read();if(done||aborted)break;
     total+=value.length;if(total>maxBytes)throw Error('size');chunks.push(value);}
-  })(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout')),8000);})]);
- }finally{clearTimeout(timer);reader.cancel().catch(()=>{});}
+  })();
+  reading.catch(()=>{});
+  await Promise.race([reading,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('timeout')),8000);})]);
+ }finally{
+  aborted=true;
+  clearTimeout(timer);
+  void reader.cancel().catch(()=>{});
+ }
  const all=new Uint8Array(total);let offset=0;for(const c of chunks){all.set(c,offset);offset+=c.length;}
  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(all));
 }

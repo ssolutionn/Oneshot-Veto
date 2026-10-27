@@ -4,6 +4,9 @@
 // pages that know the code can send commands to OBS.
 
 const VDO = 'https://vdo.ninja/';
+const VDO_ORIGINS = new Set(['https://vdo.ninja', 'https://cdn-backup.vdo.ninja']);
+const isVdoMessage = event => VDO_ORIGINS.has(event.origin);
+const VDO_TARGET_ORIGIN = new URL(VDO).origin;
 // Signalling/ICE can take much longer than a heartbeat gap. Never tear down
 // a new connection on the shorter deadline used for an established channel.
 export const VDO_CONNECT_TIMEOUT = 30000, VDO_CONNECT_MAX_TIMEOUT = 90000, VDO_IDLE_TIMEOUT = 15000;
@@ -98,7 +101,7 @@ export class VdoLink {
     addEventListener('message', this.listener);
   }
   async receive(event) {
-    if (event.source !== this.iframe.contentWindow || !event.data || typeof event.data !== 'object') return;
+    if (!isVdoMessage(event) || event.source !== this.iframe.contentWindow || !event.data || typeof event.data !== 'object') return;
     const data = event.data;
     const peer = data.UUID || data.streamID;
     // view-connection: the stream we view (the dock); push-connection: a
@@ -118,7 +121,7 @@ export class VdoLink {
   async send(message) {
     this.iframe.contentWindow?.postMessage({
       sendData: { oneshot: await seal(this.secrets.key, message) }
-    }, '*');
+    }, VDO_TARGET_ORIGIN);
   }
   close() {
     removeEventListener('message', this.listener);
@@ -129,13 +132,13 @@ export class VdoLink {
 // Which stream IDs of the selected match are publishing. One viewer per team
 // room; getStreamIDs is polled because join/leave events can be missed.
 export class CamWatch {
-  constructor(onChange, interval = 4000) {
-    Object.assign(this, { onChange, interval });
+  constructor(onChange, interval = 4000, responseTTL = 12000) {
+    Object.assign(this, { onChange, interval, responseTTL });
     this.rooms = new Map();
     this.live = new Set();
     this.listener = event => this.receive(event);
     addEventListener('message', this.listener);
-    this.timer = setInterval(() => this.poll(), interval);
+    this.timer = setInterval(() => { this.poll(); this.update(); }, interval);
   }
   // groups: [{ room, ids: [...] }]. Unchanged rooms keep their iframe.
   watch(groups) {
@@ -151,7 +154,7 @@ export class CamWatch {
     for (const [room, ids] of wanted) {
       if (!this.rooms.has(room)) {
         this.rooms.set(room, {
-          ids, password: passwords.get(room), live: new Set(), answered: false,
+          ids, password: passwords.get(room), live: new Set(), answered: false, lastResponseAt: 0,
           iframe: frame(watchUrl(room, ids, passwords.get(room)), 'Статус вебок')
         });
       }
@@ -159,11 +162,13 @@ export class CamWatch {
     this.update();
   }
   receive(event) {
+    if (!isVdoMessage(event)) return;
     const entry = [...this.rooms.values()].find(e => e.iframe.contentWindow === event.source);
     if (!entry || !event.data || typeof event.data !== 'object') return;
     const data = event.data;
     if (data.streamIDs && typeof data.streamIDs === 'object') {
       entry.answered = true;
+      entry.lastResponseAt = Date.now();
       entry.live = new Set(Object.keys(data.streamIDs).filter(id => entry.ids.includes(id)));
     } else if (data.action === 'view-connection' && entry.ids.includes(data.streamID)) {
       // The data channel to a viewed stream opened (true) or closed (false).
@@ -174,13 +179,20 @@ export class CamWatch {
   }
   poll() {
     for (const entry of this.rooms.values()) {
-      entry.iframe.contentWindow?.postMessage({ getStreamIDs: true }, '*');
+      entry.iframe.contentWindow?.postMessage({ getStreamIDs: true }, VDO_TARGET_ORIGIN);
     }
   }
   // onChange(live, checking): checking lists stream IDs whose room has not
   // answered yet, so the panel can say "проверяем" instead of "нет камеры".
   update() {
+    const now = Date.now();
     const entries = [...this.rooms.values()];
+    for (const entry of entries) {
+      if (entry.answered && now - entry.lastResponseAt >= this.responseTTL) {
+        entry.answered = false;
+        entry.live.clear();
+      }
+    }
     this.live = new Set(entries.flatMap(e => [...e.live]));
     this.onChange(this.live, new Set(entries.filter(e => !e.answered).flatMap(e => e.ids)));
   }

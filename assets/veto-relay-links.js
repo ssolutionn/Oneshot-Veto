@@ -6,10 +6,10 @@ export class ServerRoomLink {
   constructor(room,secrets,key,onMessage,onStatus=()=>{}) {
     this.secrets=secrets;this.onMessage=onMessage;this.stopped=false;
     const me=room.me==='a'?0:room.me==='b'?1:null;
-    this.client=new RelayClient(room.relay,room.fp,(box,topic,fresh)=>this.open(box,fresh?secrets.streams[room.fp.indexOf(topic)]:''),
+    this.client=new RelayClient(room.relay,room.fp,(box,topic,fresh)=>this.open(box,fresh?secrets.streams[room.fp.indexOf(topic)]:'',fresh),
       {publisher:me===null?null:{key,point:room.p[me]},onStatus});
   }
-  async open(box,via){const msg=await unseal(this.secrets.key,box);if(msg&&!this.stopped)return this.onMessage(msg,via);}
+  async open(box,via,fresh=true){const msg=await unseal(this.secrets.key,box);if(msg&&!this.stopped)return this.onMessage(msg,via,fresh);}
   async send(message){if(!this.stopped)return this.client.send(await seal(this.secrets.key,message));}
   close(){this.stopped=true;this.client.close();}
 }

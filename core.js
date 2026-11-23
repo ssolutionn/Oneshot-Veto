@@ -8,6 +8,18 @@ export const DEFAULT_SOURCE = {
   playoffsGid: '1212769715'
 };
 
+const SEASON3_SHEET_ID = '1hglUuahUqEEcTZjiok63ZcGDQByJiV4Ic5Vh_R-A82A';
+export const SEASON3_SOURCE = {
+  scheduleId: SEASON3_SHEET_ID,
+  scheduleGid: '1325268422',
+  playoffsGid: '1361112809'
+};
+
+export function scheduleRange(id, gid) {
+  return id === SEASON3_SOURCE.scheduleId &&
+    [SEASON3_SOURCE.scheduleGid, SEASON3_SOURCE.playoffsGid].includes(gid) ? 'A6:N300' : 'A1:N300';
+}
+
 const line = value => String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim();
 
 export function decodeGviz(text) {
@@ -69,7 +81,7 @@ const EN_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june',
   'july', 'august', 'september', 'october', 'november', 'december'];
 const PLAYOFF_STAGES = [
   [/^quarter-?finals?\b/i, 'Четвертьфинал'], [/^semi-?finals?\b/i, 'Полуфинал'],
-  [/^3rd place/i, 'Матч за 3 место'], [/^grand final/i, 'Гранд-финал']
+  [/^(?:3rd place|third[ -]place)/i, 'Матч за 3 место'], [/^grand final/i, 'Гранд-финал']
 ];
 
 // The organizer's sheet ("Schedule (Group Stage)", "Schedule (Playoffs)")
@@ -84,10 +96,12 @@ function organizerColumns(v) {
   return Object.values(cols).every(i => i >= 0) ? cols : null;
 }
 function organizerDate(text) {
-  const m = text.toLowerCase().match(/^([a-z]+)\s+(\d{1,2})$/);
-  const month = m ? EN_MONTHS.indexOf(m[1]) : -1;
-  return month < 0 ? '' :
-    `${m[2].padStart(2, '0')}.${String(month + 1).padStart(2, '0')}`;
+  const parts = text.toLowerCase().split(/\s+/);
+  if (parts.length !== 2) return '';
+  const [monthName, day] = /^\d/.test(parts[0]) ? parts.reverse() : parts;
+  const month = EN_MONTHS.findIndex(name => monthName === name || monthName === name.slice(0, 3));
+  if (month < 0 || !/^\d{1,2}$/.test(day) || Number(day) < 1 || Number(day) > 31) return '';
+  return `${day.padStart(2, '0')}.${String(month + 1).padStart(2, '0')}`;
 }
 function organizerStage(text) {
   const group = text.match(/\b([A-H])\d+$/);
@@ -99,12 +113,20 @@ function organizerStage(text) {
     stage: playoff ? playoff[1] + (number ? ` ${number}` : '') : text
   };
 }
-// "PRIVATE (ex-RUBY)" in the organizer's sheet is "PRIVATE" in the rosters.
+// "PRIVATE (ex-RUBY)" in the organizer's sheet is "PRIVATE" in the rosters;
+// but "Aces (ex-Black Phoenix)" may still be "Black Phoenix" there, so the old
+// name is kept too (teamWas) and rosterMatch picks whichever the rosters have.
 const teamName = text => text.replace(/\s*\(ex-[^)]*\)\s*$/i, '');
+const teamWas = text => line(text.match(/\(ex-([^)]*)\)\s*$/i)?.[1]);
+export function rosterMatch(match, names) {
+  const pick = (name, was) => names.includes(name) ? name : was && names.includes(was) ? was : '';
+  const team1 = pick(match.team1, match.team1Was), team2 = pick(match.team2, match.team2Was);
+  return team1 && team2 && team1 !== team2 ? { ...match, team1, team2 } : null;
+}
 
 // Two layouts: the organizer's sheet (found by its header row, dated rows)
 // and a day sheet «Матчи ДД.ММ» (B time, C/D teams, E group; no dates).
-export function parseSchedule(rows) {
+export function parseSchedule(rows, { includePending = false } = {}) {
   // The key names the match, not its row: a row inserted above it in the
   // sheet must not reset a veto in progress. Identical rows get a counter.
   const seen = new Map();
@@ -116,6 +138,7 @@ export function parseSchedule(rows) {
     const match = cols ? {
       date: organizerDate(v[cols.date] || ''), time: v[cols.time] || '',
       team1: teamName(v[cols.team1] || ''), team2: teamName(v[cols.team2] || ''),
+      team1Was: teamWas(v[cols.team1] || ''), team2Was: teamWas(v[cols.team2] || ''),
       ...organizerStage(v[cols.stage] || '')
     } : {
       date: '', time: v[1] || '', team1: v[2] || '', team2: v[3] || '',
@@ -123,13 +146,25 @@ export function parseSchedule(rows) {
       stage: /^[A-H]$/.test(v[4] || '') ? `Группа ${v[4]}` : v[4] || ''
     };
     const time = match.time.match(TIME);
-    if (!match.team1 || !match.team2 || !time || Number(time[1]) > 23) return [];
-    match.time = `${time[1].padStart(2, '0')}:${time[2]}`;
+    match.time = time && Number(time[1]) <= 23 ? `${time[1].padStart(2, '0')}:${time[2]}` : '';
+    if (includePending && cols) {
+      if (!match.date || !match.stage) return [];
+    } else if (!match.team1 || !match.team2 || !match.time) return [];
     const fields = [match.date, match.time, match.team1, match.team2, match.stage];
     const id = JSON.stringify(fields);
     const repeat = seen.get(id) || 0;
     seen.set(id, repeat + 1);
     return [{ ...match, key: JSON.stringify([...fields, repeat]) }];
+  });
+}
+
+export function season3Schedule(rows, teams) {
+  const names = new Map(teams.map(team => [personKey(team.name), team.name]));
+  return parseSchedule(rows, { includePending: true }).map(match => {
+    const a = names.get(personKey(match.team1)) || names.get(personKey(match.team1Was));
+    const b = names.get(personKey(match.team2)) || names.get(personKey(match.team2Was));
+    return { ...match, team1: a || match.team1, team2: b || match.team2,
+      unavailable: !a || !b || a === b, format: 'BO3' };
   });
 }
 

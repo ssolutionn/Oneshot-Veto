@@ -10,7 +10,6 @@ import { seal, unseal, VDO_CONNECT_TIMEOUT, VDO_CONNECT_MAX_TIMEOUT, VDO_IDLE_TI
 import { ServerRoomLink } from './assets/veto-relay-links.js';
 import { checkRelay } from './assets/veto-relay-client.js';
 import { relayEndpoint } from './assets/veto-relay-protocol.js';
-import { statusView, STATUS_BASE_CLASS } from './assets/veto-status.js';
 import {DEFAULT_TOURNAMENT,friendlyCaptainLinks,resolveRoomLink} from './assets/veto-short-links.js';
 import {shortPathValid} from './assets/veto-short-protocol.js';
 import {
@@ -46,8 +45,6 @@ const WORDS = {
     transport:'Connection',ourServer:'Our server',
     serverOnline:'Server connection active',serverRetry:'Server unavailable. Reconnecting; the last verified moves are kept.',
     serverWait:'Connecting to our server…',vdoConnection:'Connection: VDO.Ninja',
-    browserOffline:'You are offline: the browser has no internet. The last verified moves are kept.',
-    unsentMoves:'Syncing · retrying',presenceOnline:'online',presenceOffline:'offline',presenceExpected:'expected',
     reconnect:'Reconnect',reconnecting:'Reconnecting…',
     title: 'Map veto', createHeading: "New captains' veto",
     createNote: 'The site makes a personal link for each captain, a spectator link and an admin link. By default the captains toss a fair coin; you can instead assign the first pick (first ban in BO1).',
@@ -99,7 +96,7 @@ const WORDS = {
     'Сейчас не твой ход.': "It's not your turn.", 'Эта карта уже выбрана.': 'This map is already taken.',
     'Нужны две разные команды.': 'Two different teams are needed.', 'Слишком длинное название команды.': 'A team name is too long.',
     'Монетка не сходится.': 'The coin does not match.',
-    callAdmin: '🔔 Call admin',
+    callAdmin: '🔔 Call admin', called: s => `Admin called · again in ${s} s`,
     calledToast: 'The admin sees your call on their page',
     alert: (name, time) => `🔔 Captain of ${name} is calling the admin · ${time}`, gotIt: 'Got it',
     calling: '🔔 Admin call'
@@ -113,8 +110,6 @@ const WORDS = {
     transport:'Связь',ourServer:'Наш сервер',
     serverOnline:'Связь с сервером установлена',serverRetry:'Сервер недоступен. Восстанавливаем связь; проверенные ходы сохранены.',
     serverWait:'Подключаемся к нашему серверу…',vdoConnection:'Связь: VDO.Ninja',
-    browserOffline:'Вы не в сети: у браузера нет интернета. Проверенные ходы сохранены.',
-    unsentMoves:'Синхронизация · повторяем',presenceOnline:'online',presenceOffline:'offline',presenceExpected:'ожидается',
     reconnect:'Переподключить связь',reconnecting:'Переподключаем…',
     title: 'Вето карт', createHeading: 'Новое вето для капитанов',
     createNote: 'Сайт сделает личную ссылку каждому капитану, ссылку зрителей и ссылку админа. По умолчанию капитаны бросают честную монетку; вместо неё можно сразу назначить команду на первый пик (в BO1 — первый бан).',
@@ -163,7 +158,7 @@ const WORDS = {
     coinLost: 'Монетку открыть нельзя: твоя часть осталась в другом браузере или устройстве, где ты заходил первым. Открой ссылку там или попроси админа сделать новые ссылки.',
     conflict: (who, step) => `Внимание: ${who} подписал два разных хода на шаге ${step}. Засчитан первый. Напишите админу — он решит, переигрывать ли вето.`,
     captainOf: name => `капитан ${name}`, aCaptain: 'капитан',
-    callAdmin: '🔔 Позвать админа',
+    callAdmin: '🔔 Позвать админа', called: s => `Админ позван · ещё раз через ${s} с`,
     calledToast: 'Админ видит вызов у себя на странице',
     alert: (name, time) => `🔔 Капитан ${name} зовёт админа · ${time}`, gotIt: 'Понял',
     calling: '🔔 Зовут админа'
@@ -381,7 +376,7 @@ async function setupCreate() {
     const last = store(LAST_KEY);
     const room = last?.room;
     const fresh = Date.now() - (Number(last?.at) || 0) < RESTORE_FOR;
-    if (fresh && room && !(room.v === 3 && room.chooser != null) && Array.isArray(room.t) && last.links?.a && last.links?.b && last.links?.s && last.links?.o &&
+    if (fresh && room && room.chooser == null && Array.isArray(room.t) && last.links?.a && last.links?.b && last.links?.s && last.links?.o &&
         (!asked || (asked[0] === room.t[0] && asked[1] === room.t[1] && asked[2] === room.f && (!params.has('via') || Boolean(room.relay) === (params.get('via') === 'server')) &&
           (!params.has('tournament') || params.get('tournament') === (last.tournament||DEFAULT_TOURNAMENT)) &&
           (!params.has('start') || params.get('start') === String(room.starter ?? 'coin'))))) {
@@ -415,7 +410,7 @@ class Link {
     for (const stream of views) this.make('view', stream);
     this.listener = event => {
       const frame = this.frames.find(item => item.contentWindow === event.source);
-      if (!frame || !VDO_ORIGINS.has(event.origin)) return;
+      if (!frame) return;
       const box = event.data?.dataReceived?.oneshotVeto;
       const stream = this.streams.get(frame) || '';
       if (box && stream) {
@@ -506,7 +501,7 @@ class Link {
   }
   async send(message) {
     const box = await seal(this.secrets.key, message);
-    for (const iframe of this.frames) iframe.contentWindow?.postMessage({ sendData: { oneshotVeto: box } }, new URL(VDO).origin);
+    for (const iframe of this.frames) iframe.contentWindow?.postMessage({ sendData: { oneshotVeto: box } }, '*');
     this.channel?.postMessage(box);
   }
   close() {
@@ -605,54 +600,12 @@ async function enterRoom(room) {
   }
   await learnKeys(store(keysKey));
   let transportState = room.relay ? 'serverWait' : 'vdoConnection';
-  let browserOffline = !navigator.onLine;
-  const paintTransport = () => {
-    const state = browserOffline ? 'browserOffline' : transportState;
-    const view = statusView(state) || statusView('vdoConnection');
-    if (!view) return;
-    const el = $('vtTransportStatus');
-    el.dataset.state = state;
-    el.className = ['vt-foot', STATUS_BASE_CLASS, view.className].join(' ');
-    el.textContent = t(view.textKey);
-  };
+  const paintTransport = () => { $('vtTransportStatus').textContent = t(transportState); };
   relabel.add(paintTransport);
   const link = room.relay ? new ServerRoomLink(room, secrets, key, receive, status => {
     transportState = status === 'online' ? 'serverOnline' : 'serverRetry'; paintTransport();
   }) : new Link(secrets, me === null ? '' : secrets.streams[me],
     me === null ? secrets.streams : [secrets.streams[1 - me]], receive);
-  // The browser itself being offline outranks whatever the transport last
-  // reported; when it comes back, the transport reports its own state again.
-  const netOffline = () => { browserOffline = true; paintTransport(); };
-  const netOnline = () => {
-    browserOffline = false;
-    transportState = room.relay ? 'serverWait' : 'vdoConnection';
-    paintTransport();
-  };
-  addEventListener('offline', netOffline);
-  addEventListener('online', netOnline);
-  // A BFCache-frozen page misses the 'online' transition entirely, so the
-  // flag can stay stale after pageshow: re-read navigator.onLine there.
-  const netSync = () => {
-    if (browserOffline === !navigator.onLine) return;
-    browserOffline = !navigator.onLine;
-    if (browserOffline) paintTransport();
-    else netOnline();
-  };
-  addEventListener('pageshow', netSync);
-  // A retry attempt clears `pending` while the POST is in flight, which would
-  // flicker the badge off for up to the full attempt duration: hide it only
-  // once the link has settled without anything left to send.
-  let unsentShown = false;
-  const paintUnsent = () => {
-    const unsent = Boolean(link.unsent);
-    if (unsent) unsentShown = true;
-    else if (link.sending) return; // still trying; the badge stays until the attempt settles
-    else unsentShown = false;
-    const el = $('vtUnsent');
-    el.hidden = !unsentShown;
-    setText(el, unsentShown ? t('unsentMoves') : '');
-  };
-  relabel.add(paintUnsent);
   paintTransport();
   $('vtReconnect').hidden = Boolean(room.relay);
   $('vtReconnect').addEventListener('click', () => {
@@ -674,29 +627,10 @@ async function enterRoom(room) {
     if (!event.persisted) {
       link.close?.();
       if (localLog) removeEventListener('storage', localLog);
-      removeEventListener('offline', netOffline);
-      removeEventListener('online', netOnline);
-      removeEventListener('pageshow', netSync);
     }
   });
 
   const online = team => team === me || Date.now() - seen[team ? 'b' : 'a'] < ONLINE_FOR;
-  // The connection strip shows only the opponent: the own team's card already
-  // says "это ты" with the same dot, and a self-chip could contradict the
-  // transport line during a browser-offline spell.
-  const presenceState = (team, live) => (team === me ? null : seen[team ? 'b' : 'a'] ? (live ? 'online' : 'offline') : 'expected');
-  const presenceKeyOf = team => presenceState(team, online(team));
-  function paintPresence(team, live) {
-    const el = $('vtPresence' + team);
-    // Chips stay hidden until first painted (HTML default hidden): neither the
-    // pre-render flash nor a crashed entry path can show an empty default chip.
-    // Captains see only the opponent; spectators and the admin keep both.
-    if (team === me) { el.hidden = true; return; }
-    el.dataset.state = presenceState(team, live);
-    const key = 'presence' + (el.dataset.state === 'online' ? 'Online' : el.dataset.state === 'offline' ? 'Offline' : 'Expected');
-    el.firstElementChild.textContent = names[team] + ' · ' + t(key);
-    el.hidden = false;
-  }
   // Spectators and the admin only listen: they add no load on the captains' phones.
   // Serialize envelopes so their signed timestamps cannot overtake each other.
   let sending = null, pendingMessage = null;
@@ -734,7 +668,7 @@ async function enterRoom(room) {
   }
   // Only the newest log from each source waits for verification, so a flood
   // of junk cannot hold real moves back.
-  async function receive(message, via, fresh = true) {
+  async function receive(message, via) {
     if (!message || message.t !== 'log' || !Array.isArray(message.log)) return;
     await learnKeys(message.p);
     // The dedicated viewer iframe proves its stream owner. If that iframe is
@@ -752,10 +686,10 @@ async function enterRoom(room) {
       from = proofFrom;
       link.reconnectStream?.(secrets.streams[from === 'a' ? 0 : 1]);
     }
-    if (from && fresh) seen[from] = Date.now();
+    if (from) seen[from] = Date.now();
     // Calls additionally require the captain's signature: knowing a public
     // spectator link and a VDO stream ID is not enough to ring the admin.
-    if (fresh && admin && from && proofFrom === from && Number.isSafeInteger(message.call)) {
+    if (admin && from && proofFrom === from && Number.isSafeInteger(message.call)) {
       ring(from === 'a' ? 0 : 1, message.call);
     }
     const unkeyed = Array.isArray(message.p) && [0, 1].some(team => !room.p[team] && message.p[team]);
@@ -840,14 +774,13 @@ async function enterRoom(room) {
     if (Date.now() - callAt < CALL_AGAIN) return;
     callAt = Date.now();
     send();
+    toast(t('calledToast'));
     showCall();
   }
   function showCall() {
     const left = Math.ceil((CALL_AGAIN - (Date.now() - callAt)) / 1000);
     $('vtCallAdmin').disabled = left > 0;
-    // The live region announces the call once, not a countdown that would
-    // re-announce every tick for the whole 30s window.
-    setText($('vtCallState'), left > 0 ? t('calledToast') : '');
+    setText($('vtCallState'), left > 0 ? t('called', left) : '');
   }
   let audio = null;
   function beep() {
@@ -949,11 +882,10 @@ async function enterRoom(room) {
   // Rebuilding the map buttons every second would eat clicks: the tick only
   // moves the clock and re-renders when presence changed.
   let shownFor = '';
-  const presenceKey = () => [online(0), online(1), presenceKeyOf(0), presenceKeyOf(1)].join();
+  const presenceKey = () => [online(0), online(1)].join();
   function tick() {
     try { autoCoin(); } catch { /* the clock still moves */ }
     if (me !== null) showCall();
-    paintUnsent();
     if (presenceKey() !== shownFor) return render();
     const state = replay(room, log);
     showClock(state, nextTurn(room, state));
@@ -1005,7 +937,6 @@ async function enterRoom(room) {
       card.dataset.online = live ? 'yes' : 'no';
       card.querySelector('.vt-presence').textContent = team === me ? t('itsYou') : live ? t('online') : t('offline');
       card.classList.toggle('is-turn', turn.team === team && coin === 'shown');
-      paintPresence(team, live);
     }
 
     showClock(state, turn);
@@ -1108,6 +1039,13 @@ async function enterRoom(room) {
         side.append(`${names[card.sideTeam]} · `, mark);
       }
       else if (card.status === 'pick') side.textContent = t('choosingShort');
+      // Large BAN/PICK stamp in the corner — readable in grayscale.
+      if (card.status === 'ban' || card.status === 'pick') {
+        el.append(Object.assign(document.createElement('span'), {
+          className: 'vt-map-stamp', dataset: { status: card.status },
+          textContent: card.status.toUpperCase()
+        }));
+      }
       const num = Object.assign(document.createElement('span'), { className: 'vt-map-num', textContent: order.get(card.map) || '' });
       el.append(...[img, num, name, tag, side].filter(Boolean));
       el.addEventListener('click', () => {

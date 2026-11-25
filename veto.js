@@ -5,12 +5,11 @@
 // their own and views the other's, spectators view both. Same-browser tabs
 // also talk over a BroadcastChannel. Rules live in veto-room.js. English by
 // default, Russian with the flag (localStorage oneshot-veto-lang).
-import { MAP_POOL, teamLogo, teamHltv, DEFAULT_SOURCE, decodeGviz, parseSchedule } from './core.js';
+import { MAP_POOL, teamLogo, teamHltv, DEFAULT_SOURCE, SEASON3_SOURCE, scheduleRange, personKey, decodeGviz, parseSchedule } from './core.js';
 import { seal, unseal, VDO_CONNECT_TIMEOUT, VDO_CONNECT_MAX_TIMEOUT, VDO_IDLE_TIMEOUT } from './vdo.js';
 import { ServerRoomLink } from './assets/veto-relay-links.js';
 import { checkRelay } from './assets/veto-relay-client.js';
 import { relayEndpoint } from './assets/veto-relay-protocol.js';
-import { statusView, STATUS_BASE_CLASS } from './assets/veto-status.js';
 import {DEFAULT_TOURNAMENT,friendlyCaptainLinks,resolveRoomLink} from './assets/veto-short-links.js';
 import {shortPathValid} from './assets/veto-short-protocol.js';
 import {
@@ -46,13 +45,12 @@ const WORDS = {
     transport:'Connection',ourServer:'Our server',
     serverOnline:'Server connection active',serverRetry:'Server unavailable. Reconnecting; the last verified moves are kept.',
     serverWait:'Connecting to our server…',vdoConnection:'Connection: VDO.Ninja',
-    browserOffline:'You are offline: the browser has no internet. The last verified moves are kept.',
-    unsentMoves:'Syncing · retrying',presenceOnline:'online',presenceOffline:'offline',presenceExpected:'expected',
     reconnect:'Reconnect',reconnecting:'Reconnecting…',
     title: 'Map veto', createHeading: "New captains' veto",
     createNote: 'The site makes a personal link for each captain, a spectator link and an admin link. By default the captains toss a fair coin; you can instead assign the first pick (first ban in BO1).',
     settings: 'Veto settings', match: 'Match from the schedule', loadingSchedule: 'Loading the schedule…',
-    pickMatch: 'Pick a match — the teams fill in', noMatches: 'No upcoming matches in the schedule',
+    pickMatch: 'Pick a match — the teams fill in', noMatches: 'No matches in the schedule',
+    pendingTeam: 'Team TBC', pendingTime: 'Time TBC', partialSchedule: 'Only part of the schedule is available',
     scheduleFailed: 'The schedule did not load — type the teams below', today: 'today', tomorrow: 'tomorrow', noDate: 'No date',
     team1: 'Team 1', team2: 'Team 2', format: 'Format', timer: 'Timer',
     min5: '5 minutes', min3: '3 minutes', min7: '7 minutes', min10: '10 minutes', min15: '15 minutes', noTimer: 'No timer',
@@ -98,7 +96,7 @@ const WORDS = {
     'Сейчас не твой ход.': "It's not your turn.", 'Эта карта уже выбрана.': 'This map is already taken.',
     'Нужны две разные команды.': 'Two different teams are needed.', 'Слишком длинное название команды.': 'A team name is too long.',
     'Монетка не сходится.': 'The coin does not match.',
-    callAdmin: '🔔 Call admin',
+    callAdmin: '🔔 Call admin', called: s => `Admin called · again in ${s} s`,
     calledToast: 'The admin sees your call on their page',
     alert: (name, time) => `🔔 Captain of ${name} is calling the admin · ${time}`, gotIt: 'Got it',
     calling: '🔔 Admin call'
@@ -112,13 +110,12 @@ const WORDS = {
     transport:'Связь',ourServer:'Наш сервер',
     serverOnline:'Связь с сервером установлена',serverRetry:'Сервер недоступен. Восстанавливаем связь; проверенные ходы сохранены.',
     serverWait:'Подключаемся к нашему серверу…',vdoConnection:'Связь: VDO.Ninja',
-    browserOffline:'Вы не в сети: у браузера нет интернета. Проверенные ходы сохранены.',
-    unsentMoves:'Синхронизация · повторяем',presenceOnline:'online',presenceOffline:'offline',presenceExpected:'ожидается',
     reconnect:'Переподключить связь',reconnecting:'Переподключаем…',
     title: 'Вето карт', createHeading: 'Новое вето для капитанов',
     createNote: 'Сайт сделает личную ссылку каждому капитану, ссылку зрителей и ссылку админа. По умолчанию капитаны бросают честную монетку; вместо неё можно сразу назначить команду на первый пик (в BO1 — первый бан).',
     settings: 'Настройки вето', match: 'Матч из расписания', loadingSchedule: 'Загружаем расписание…',
-    pickMatch: 'Выбери матч — команды подставятся сами', noMatches: 'В расписании нет предстоящих матчей',
+    pickMatch: 'Выбери матч — команды подставятся сами', noMatches: 'В расписании нет матчей',
+    pendingTeam: 'Команда уточняется', pendingTime: 'Время уточняется', partialSchedule: 'Доступна только часть расписания',
     scheduleFailed: 'Расписание не загрузилось — впиши команды ниже', today: 'сегодня', tomorrow: 'завтра', noDate: 'Без даты',
     team1: 'Команда 1', team2: 'Команда 2', format: 'Формат', timer: 'Таймер',
     min5: '5 минут', min3: '3 минуты', min7: '7 минут', min10: '10 минут', min15: '15 минут', noTimer: 'Без таймера',
@@ -161,7 +158,7 @@ const WORDS = {
     coinLost: 'Монетку открыть нельзя: твоя часть осталась в другом браузере или устройстве, где ты заходил первым. Открой ссылку там или попроси админа сделать новые ссылки.',
     conflict: (who, step) => `Внимание: ${who} подписал два разных хода на шаге ${step}. Засчитан первый. Напишите админу — он решит, переигрывать ли вето.`,
     captainOf: name => `капитан ${name}`, aCaptain: 'капитан',
-    callAdmin: '🔔 Позвать админа',
+    callAdmin: '🔔 Позвать админа', called: s => `Админ позван · ещё раз через ${s} с`,
     calledToast: 'Админ видит вызов у себя на странице',
     alert: (name, time) => `🔔 Капитан ${name} зовёт админа · ${time}`, gotIt: 'Понял',
     calling: '🔔 Зовут админа'
@@ -248,18 +245,24 @@ function showLinks(made) {
 }
 relabel.add(() => { if (shownLinks) showLinks(shownLinks); });
 const RESTORE_FOR = 6 * 3600000;
-// The schedule sheet the panel reads (its own source if changed there):
-// matches from today (MSK) on fill the teams, nobody types them.
+// Use the panel's Season 3 schedule unless an operator set a custom source.
 const mskDay = (shift = 0) => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit' })
   .format(new Date(Date.now() + shift * 86400000));
 async function scheduleRows(id, gid) {
   const url = new URL(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq`);
-  url.search = new URLSearchParams({ gid, range: 'A1:N300', headers: '1', tqx: 'out:json', _t: String(Date.now()) });
+  const range = id === SEASON3_SOURCE.scheduleId ? scheduleRange(id, gid) : 'A1:Z300';
+  url.search = new URLSearchParams({ gid, range, headers: '1', tqx: 'out:json', _t: String(Date.now()) });
   const response = await fetch(url, { credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error(`Google Sheets ${response.status}`);
   return decodeGviz(await response.text());
 }
 let matches = null;
+let partialSchedule = false;
+const scheduledTeam = name => !/^(?:tbd|tba|tbc|winner|loser|уточняется)(?:\s|$)/i.test(name) && personKey(name);
+function canChooseMatch(match) {
+  const a = scheduledTeam(match.team1), b = scheduledTeam(match.team2);
+  return Boolean(a && b && a !== b);
+}
 function fillMatches() {
   const select = $('vtMatch');
   const kept = select.value;
@@ -269,36 +272,44 @@ function fillMatches() {
     select.title = matches.message;
     return;
   }
+  select.title = partialSchedule ? t('partialSchedule') : '';
   const label = date => date === mskDay() ? `${date} · ${t('today')}` : date === mskDay(1) ? `${date} · ${t('tomorrow')}` : date || t('noDate');
   const groups = new Map();
   for (const m of matches) {
     if (!groups.has(m.date)) groups.set(m.date, Object.assign(document.createElement('optgroup'), { label: label(m.date) }));
     groups.get(m.date).append(Object.assign(document.createElement('option'), {
-      value: JSON.stringify([m.team1, m.team2]),
-      textContent: `${m.time} · ${m.team1} vs ${m.team2}${m.stage ? ` · ${m.stage}` : ''}`
+      value: m.key, disabled: !canChooseMatch(m),
+      textContent: `${m.time || t('pendingTime')} · ${scheduledTeam(m.team1) ? m.team1 : t('pendingTeam')} vs ${scheduledTeam(m.team2) ? m.team2 : t('pendingTeam')}${m.stage ? ` · ${m.stage}` : ''}`
     }));
   }
-  const first = Object.assign(document.createElement('option'), { value: '', textContent: matches.length ? t('pickMatch') : t('noMatches') });
+  const first = Object.assign(document.createElement('option'), { value: '',
+    textContent: t(partialSchedule ? 'partialSchedule' : matches.length ? 'pickMatch' : 'noMatches') });
   select.replaceChildren(first, ...groups.values());
   // The panel's teams (#new&a=&b=) pick their match in the list.
-  const asked = kept || JSON.stringify([$('vtTeamA').value, $('vtTeamB').value]);
-  if ([...select.options].some(o => o.value === asked)) select.value = asked;
+  const asked = matches.find(m => canChooseMatch(m) &&
+    personKey(m.team1) === personKey($('vtTeamA').value) && personKey(m.team2) === personKey($('vtTeamB').value));
+  select.value = matches.some(m => m.key === kept && canChooseMatch(m)) ? kept : asked?.key || '';
 }
 relabel.add(fillMatches);
 async function loadMatches() {
-  let source = DEFAULT_SOURCE;
-  try { source = { ...DEFAULT_SOURCE, ...(JSON.parse(localStorage.getItem('webcam-desk-source')) || {}) }; } catch { /* default */ }
+  let source = SEASON3_SOURCE;
+  try {
+    const saved = JSON.parse(localStorage.getItem('webcam-desk-source'));
+    const sheet = saved?.scheduleId || saved?.id;
+    if (/^[\w-]{20,100}$/.test(sheet || '') && /^\d+$/.test(saved.scheduleGid || '') &&
+        (saved.selected === true || sheet !== DEFAULT_SOURCE.scheduleId || saved.scheduleGid !== DEFAULT_SOURCE.scheduleGid)) source = saved;
+  } catch { /* use the current season */ }
   const id = source.scheduleId || source.id, gid = source.scheduleGid;
   try {
-    if (!gid) throw new Error('no schedule sheet');
-    const tabs = [scheduleRows(id, gid)];
-    if (id === DEFAULT_SOURCE.scheduleId && gid === DEFAULT_SOURCE.scheduleGid) {
-      tabs.push(scheduleRows(id, DEFAULT_SOURCE.playoffsGid).catch(() => []));
-    }
-    const rows = (await Promise.all(tabs)).flat();
+    const season3 = id === SEASON3_SOURCE.scheduleId && [SEASON3_SOURCE.scheduleGid, SEASON3_SOURCE.playoffsGid].includes(gid);
+    const tabs = season3 && gid === SEASON3_SOURCE.scheduleGid ? [gid, SEASON3_SOURCE.playoffsGid] : [gid];
+    const reads = await Promise.allSettled(tabs.map(tab => scheduleRows(id, tab)));
+    if (reads.every(read => read.status === 'rejected')) throw reads[0].reason;
+    partialSchedule = reads.some(read => read.status === 'rejected');
+    const rows = reads.flatMap(read => read.status === 'fulfilled' ? read.value : []);
     const key = date => Number(date.slice(3, 5)) * 100 + Number(date.slice(0, 2));
     const today = key(mskDay());
-    matches = parseSchedule(rows).filter(m => !m.date || key(m.date) >= today);
+    matches = parseSchedule(rows, { includePending: season3 }).filter(m => season3 || !m.date || key(m.date) >= today);
   } catch (error) { matches = error; }
   fillMatches();
 }
@@ -342,10 +353,10 @@ async function setupCreate() {
     } catch (error) { showError(errorText(error.message)); }
   });
   $('vtMatch').addEventListener('change', () => {
-    if (!$('vtMatch').value) return;
-    const [a, b] = JSON.parse($('vtMatch').value);
-    $('vtTeamA').value = a;
-    $('vtTeamB').value = b;
+    const match = Array.isArray(matches) && matches.find(m => m.key === $('vtMatch').value);
+    if (!match || !canChooseMatch(match)) return;
+    $('vtTeamA').value = match.team1;
+    $('vtTeamB').value = match.team2;
     choiceOptions();
   });
   const params = new URLSearchParams(location.hash.slice(1));
@@ -365,7 +376,7 @@ async function setupCreate() {
     const last = store(LAST_KEY);
     const room = last?.room;
     const fresh = Date.now() - (Number(last?.at) || 0) < RESTORE_FOR;
-    if (fresh && room && !(room.v === 3 && room.chooser != null) && Array.isArray(room.t) && last.links?.a && last.links?.b && last.links?.s && last.links?.o &&
+    if (fresh && room && room.chooser == null && Array.isArray(room.t) && last.links?.a && last.links?.b && last.links?.s && last.links?.o &&
         (!asked || (asked[0] === room.t[0] && asked[1] === room.t[1] && asked[2] === room.f && (!params.has('via') || Boolean(room.relay) === (params.get('via') === 'server')) &&
           (!params.has('tournament') || params.get('tournament') === (last.tournament||DEFAULT_TOURNAMENT)) &&
           (!params.has('start') || params.get('start') === String(room.starter ?? 'coin'))))) {
@@ -399,7 +410,7 @@ class Link {
     for (const stream of views) this.make('view', stream);
     this.listener = event => {
       const frame = this.frames.find(item => item.contentWindow === event.source);
-      if (!frame || !VDO_ORIGINS.has(event.origin)) return;
+      if (!frame) return;
       const box = event.data?.dataReceived?.oneshotVeto;
       const stream = this.streams.get(frame) || '';
       if (box && stream) {
@@ -490,7 +501,7 @@ class Link {
   }
   async send(message) {
     const box = await seal(this.secrets.key, message);
-    for (const iframe of this.frames) iframe.contentWindow?.postMessage({ sendData: { oneshotVeto: box } }, new URL(VDO).origin);
+    for (const iframe of this.frames) iframe.contentWindow?.postMessage({ sendData: { oneshotVeto: box } }, '*');
     this.channel?.postMessage(box);
   }
   close() {
@@ -528,7 +539,7 @@ async function enterRoom(room) {
 
   $('vtTitle').removeAttribute('data-i18n');
   $('vtTitle').textContent = `${names[0]} vs ${names[1]}`;
-  $('vtEyebrow').textContent = `MAP VETO · ${room.f}`;
+  $('vtEyebrow').append(` · ${room.f}`);
   $('vtRoom').hidden = false;
   relabel.add(() => {
     document.title = t('roomTitle', names[0], names[1]);
@@ -589,54 +600,12 @@ async function enterRoom(room) {
   }
   await learnKeys(store(keysKey));
   let transportState = room.relay ? 'serverWait' : 'vdoConnection';
-  let browserOffline = !navigator.onLine;
-  const paintTransport = () => {
-    const state = browserOffline ? 'browserOffline' : transportState;
-    const view = statusView(state) || statusView('vdoConnection');
-    if (!view) return;
-    const el = $('vtTransportStatus');
-    el.dataset.state = state;
-    el.className = ['vt-foot', STATUS_BASE_CLASS, view.className].join(' ');
-    el.textContent = t(view.textKey);
-  };
+  const paintTransport = () => { $('vtTransportStatus').textContent = t(transportState); };
   relabel.add(paintTransport);
   const link = room.relay ? new ServerRoomLink(room, secrets, key, receive, status => {
     transportState = status === 'online' ? 'serverOnline' : 'serverRetry'; paintTransport();
   }) : new Link(secrets, me === null ? '' : secrets.streams[me],
     me === null ? secrets.streams : [secrets.streams[1 - me]], receive);
-  // The browser itself being offline outranks whatever the transport last
-  // reported; when it comes back, the transport reports its own state again.
-  const netOffline = () => { browserOffline = true; paintTransport(); };
-  const netOnline = () => {
-    browserOffline = false;
-    transportState = room.relay ? 'serverWait' : 'vdoConnection';
-    paintTransport();
-  };
-  addEventListener('offline', netOffline);
-  addEventListener('online', netOnline);
-  // A BFCache-frozen page misses the 'online' transition entirely, so the
-  // flag can stay stale after pageshow: re-read navigator.onLine there.
-  const netSync = () => {
-    if (browserOffline === !navigator.onLine) return;
-    browserOffline = !navigator.onLine;
-    if (browserOffline) paintTransport();
-    else netOnline();
-  };
-  addEventListener('pageshow', netSync);
-  // A retry attempt clears `pending` while the POST is in flight, which would
-  // flicker the badge off for up to the full attempt duration: hide it only
-  // once the link has settled without anything left to send.
-  let unsentShown = false;
-  const paintUnsent = () => {
-    const unsent = Boolean(link.unsent);
-    if (unsent) unsentShown = true;
-    else if (link.sending) return; // still trying; the badge stays until the attempt settles
-    else unsentShown = false;
-    const el = $('vtUnsent');
-    el.hidden = !unsentShown;
-    setText(el, unsentShown ? t('unsentMoves') : '');
-  };
-  relabel.add(paintUnsent);
   paintTransport();
   $('vtReconnect').hidden = Boolean(room.relay);
   $('vtReconnect').addEventListener('click', () => {
@@ -658,29 +627,10 @@ async function enterRoom(room) {
     if (!event.persisted) {
       link.close?.();
       if (localLog) removeEventListener('storage', localLog);
-      removeEventListener('offline', netOffline);
-      removeEventListener('online', netOnline);
-      removeEventListener('pageshow', netSync);
     }
   });
 
   const online = team => team === me || Date.now() - seen[team ? 'b' : 'a'] < ONLINE_FOR;
-  // The connection strip shows only the opponent: the own team's card already
-  // says "это ты" with the same dot, and a self-chip could contradict the
-  // transport line during a browser-offline spell.
-  const presenceState = (team, live) => (team === me ? null : seen[team ? 'b' : 'a'] ? (live ? 'online' : 'offline') : 'expected');
-  const presenceKeyOf = team => presenceState(team, online(team));
-  function paintPresence(team, live) {
-    const el = $('vtPresence' + team);
-    // Chips stay hidden until first painted (HTML default hidden): neither the
-    // pre-render flash nor a crashed entry path can show an empty default chip.
-    // Captains see only the opponent; spectators and the admin keep both.
-    if (team === me) { el.hidden = true; return; }
-    el.dataset.state = presenceState(team, live);
-    const key = 'presence' + (el.dataset.state === 'online' ? 'Online' : el.dataset.state === 'offline' ? 'Offline' : 'Expected');
-    el.firstElementChild.textContent = names[team] + ' · ' + t(key);
-    el.hidden = false;
-  }
   // Spectators and the admin only listen: they add no load on the captains' phones.
   // Serialize envelopes so their signed timestamps cannot overtake each other.
   let sending = null, pendingMessage = null;
@@ -718,7 +668,7 @@ async function enterRoom(room) {
   }
   // Only the newest log from each source waits for verification, so a flood
   // of junk cannot hold real moves back.
-  async function receive(message, via, fresh = true) {
+  async function receive(message, via) {
     if (!message || message.t !== 'log' || !Array.isArray(message.log)) return;
     await learnKeys(message.p);
     // The dedicated viewer iframe proves its stream owner. If that iframe is
@@ -736,10 +686,10 @@ async function enterRoom(room) {
       from = proofFrom;
       link.reconnectStream?.(secrets.streams[from === 'a' ? 0 : 1]);
     }
-    if (from && fresh) seen[from] = Date.now();
+    if (from) seen[from] = Date.now();
     // Calls additionally require the captain's signature: knowing a public
     // spectator link and a VDO stream ID is not enough to ring the admin.
-    if (fresh && admin && from && proofFrom === from && Number.isSafeInteger(message.call)) {
+    if (admin && from && proofFrom === from && Number.isSafeInteger(message.call)) {
       ring(from === 'a' ? 0 : 1, message.call);
     }
     const unkeyed = Array.isArray(message.p) && [0, 1].some(team => !room.p[team] && message.p[team]);
@@ -824,14 +774,13 @@ async function enterRoom(room) {
     if (Date.now() - callAt < CALL_AGAIN) return;
     callAt = Date.now();
     send();
+    toast(t('calledToast'));
     showCall();
   }
   function showCall() {
     const left = Math.ceil((CALL_AGAIN - (Date.now() - callAt)) / 1000);
     $('vtCallAdmin').disabled = left > 0;
-    // The live region announces the call once, not a countdown that would
-    // re-announce every tick for the whole 30s window.
-    setText($('vtCallState'), left > 0 ? t('calledToast') : '');
+    setText($('vtCallState'), left > 0 ? t('called', left) : '');
   }
   let audio = null;
   function beep() {
@@ -933,11 +882,10 @@ async function enterRoom(room) {
   // Rebuilding the map buttons every second would eat clicks: the tick only
   // moves the clock and re-renders when presence changed.
   let shownFor = '';
-  const presenceKey = () => [online(0), online(1), presenceKeyOf(0), presenceKeyOf(1)].join();
+  const presenceKey = () => [online(0), online(1)].join();
   function tick() {
     try { autoCoin(); } catch { /* the clock still moves */ }
     if (me !== null) showCall();
-    paintUnsent();
     if (presenceKey() !== shownFor) return render();
     const state = replay(room, log);
     showClock(state, nextTurn(room, state));
@@ -989,7 +937,6 @@ async function enterRoom(room) {
       card.dataset.online = live ? 'yes' : 'no';
       card.querySelector('.vt-presence').textContent = team === me ? t('itsYou') : live ? t('online') : t('offline');
       card.classList.toggle('is-turn', turn.team === team && coin === 'shown');
-      paintPresence(team, live);
     }
 
     showClock(state, turn);
@@ -1092,6 +1039,13 @@ async function enterRoom(room) {
         side.append(`${names[card.sideTeam]} · `, mark);
       }
       else if (card.status === 'pick') side.textContent = t('choosingShort');
+      // Large BAN/PICK stamp in the corner — readable in grayscale.
+      if (card.status === 'ban' || card.status === 'pick') {
+        el.append(Object.assign(document.createElement('span'), {
+          className: 'vt-map-stamp', dataset: { status: card.status },
+          textContent: card.status.toUpperCase()
+        }));
+      }
       const num = Object.assign(document.createElement('span'), { className: 'vt-map-num', textContent: order.get(card.map) || '' });
       el.append(...[img, num, name, tag, side].filter(Boolean));
       el.addEventListener('click', () => {

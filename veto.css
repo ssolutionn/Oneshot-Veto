@@ -262,15 +262,6 @@ h1,h2,h3 { font-family:var(--vt-display); font-weight:600; letter-spacing:.02em;
   .vt-clock[data-state=low] .vt-clock-time { animation:none; }
 }
 
-/* Small BAN/PICK badge next to the step number — compact, readable, non-intrusive. */
-.vt-map-badge {
-  position:absolute; top:10px; right:10px; z-index:3;
-  font:600 11px/1 var(--vt-display); letter-spacing:.04em; text-transform:uppercase;
-  color:#fff; padding:2px 6px; border-radius:4px;
-  pointer-events:none;
-}
-.vt-map-badge[data-status=ban] { background:var(--vt-ban); }
-.vt-map-badge[data-status=pick] { background:var(--vt-pick); }
 .vt-map[data-status=ban] .vt-map-num { background:var(--vt-ban); color:#fff; }
 .vt-map[data-status=pick] .vt-map-num { background:var(--vt-pick); color:#fff; }
 

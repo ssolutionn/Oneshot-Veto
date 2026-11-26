@@ -1039,13 +1039,13 @@ async function enterRoom(room) {
         side.append(`${names[card.sideTeam]} · `, mark);
       }
       else if (card.status === 'pick') side.textContent = t('choosingShort');
-      // Large BAN/PICK stamp in the corner — readable in grayscale.
+      // Small BAN/PICK badge next to the step number.
       if (card.status === 'ban' || card.status === 'pick') {
-        const stamp = document.createElement('span');
-        stamp.className = 'vt-map-stamp';
-        stamp.dataset.status = card.status;
-        stamp.textContent = card.status.toUpperCase();
-        el.append(stamp);
+        const badge = document.createElement('span');
+        badge.className = 'vt-map-badge';
+        badge.dataset.status = card.status;
+        badge.textContent = card.status.toUpperCase();
+        el.append(badge);
       }
       const num = Object.assign(document.createElement('span'), { className: 'vt-map-num', textContent: order.get(card.map) || '' });
       el.append(...[img, num, name, tag, side].filter(Boolean));
